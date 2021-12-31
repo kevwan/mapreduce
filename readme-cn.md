@@ -53,6 +53,45 @@
 
 很简单，goroutine 中监听一个全局的结束 channel 就行。
 
+## 简单示例
+
+并行求平方和（不要嫌弃示例简单，只是模拟并发）
+
+```go
+package main
+
+import (
+    "fmt"
+    "log"
+
+    "github.com/kevwan/mapreduce"
+)
+
+func main() {
+    val, err := mapreduce.MapReduce(func(source chan<- interface{}) {
+        // generator
+        for i := 0; i < 10; i++ {
+            source <- i
+        }
+    }, func(item interface{}, writer mapreduce.Writer, cancel func(error)) {
+        // mapper
+        i := item.(int)
+        writer.Write(i * i)
+    }, func(pipe <-chan interface{}, writer mapreduce.Writer, cancel func(error)) {
+        // reducer
+        var sum int
+        for i := range pipe {
+            sum += i.(int)
+        }
+        writer.Write(sum)
+    })
+    if err != nil {
+        log.Fatal(err)
+    }
+    fmt.Println("result:", val)
+}
+```
+
 ## 强烈推荐！
 
 go-zero: [https://github.com/zeromicro/go-zero](https://github.com/zeromicro/go-zero)
