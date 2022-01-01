@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 )
 
 const (
@@ -120,7 +121,8 @@ func MapReduceWithSource(source <-chan interface{}, mapper MapperFunc, reducer R
 	done := make(chan struct{})
 	writer := newGuardedWriter(options.ctx, output, done)
 	var closeOnce sync.Once
-	var retErr AtomicError
+	// use atomic.Value to avoid data race
+	var retErr atomic.Value
 	finish := func() {
 		closeOnce.Do(func() {
 			close(done)
@@ -129,9 +131,9 @@ func MapReduceWithSource(source <-chan interface{}, mapper MapperFunc, reducer R
 	}
 	cancel := once(func(err error) {
 		if err != nil {
-			retErr.Set(err)
+			retErr.Store(err)
 		} else {
-			retErr.Set(ErrCancelWithNil)
+			retErr.Store(ErrCancelWithNil)
 		}
 
 		drain(source)
@@ -149,6 +151,7 @@ func MapReduceWithSource(source <-chan interface{}, mapper MapperFunc, reducer R
 			}
 		}()
 
+		// callers need to make sure reducer not panic
 		reducer(collector, writer, cancel)
 	}()
 
@@ -158,7 +161,7 @@ func MapReduceWithSource(source <-chan interface{}, mapper MapperFunc, reducer R
 
 	value, ok := <-output
 	if err := retErr.Load(); err != nil {
-		return nil, err
+		return nil, err.(error)
 	} else if ok {
 		return value, nil
 	} else {
@@ -172,7 +175,8 @@ func MapReduceVoid(generate GenerateFunc, mapper MapperFunc, reducer VoidReducer
 	_, err := MapReduce(generate, mapper, func(input <-chan interface{}, writer Writer, cancel func(error)) {
 		reducer(input, cancel)
 		// We need to write a placeholder to let MapReduce to continue on reducer done,
-		// otherwise, all goroutines are waiting. The placeholder will be discarded by MapReduce.
+		// otherwise, all goroutines are waiting.
+		// The placeholder will be discarded by MapReduce.
 		writer.Write(struct{}{})
 	}, opts...)
 	return err
@@ -253,13 +257,13 @@ func executeMappers(ctx context.Context, mapper MapFunc, input <-chan interface{
 			}
 
 			wg.Add(1)
-			// better to safely run caller defined method
 			go func() {
 				defer func() {
 					wg.Done()
 					<-pool
 				}()
 
+				// callers need to make sure mapper won't panic
 				mapper(item, writer)
 			}()
 		}

@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-var errMapReduceDummy = errors.New("dummy")
+var errDummy = errors.New("dummy")
 
 func init() {
 	log.SetOutput(ioutil.Discard)
@@ -51,13 +51,13 @@ func TestFinishErr(t *testing.T) {
 		return nil
 	}, func() error {
 		atomic.AddUint32(&total, 3)
-		return errMapReduceDummy
+		return errDummy
 	}, func() error {
 		atomic.AddUint32(&total, 5)
 		return nil
 	})
 
-	assert.Equal(t, errMapReduceDummy, err)
+	assert.Equal(t, errDummy, err)
 }
 
 func TestFinishVoid(t *testing.T) {
@@ -136,11 +136,11 @@ func TestMapReduce(t *testing.T) {
 			mapper: func(item interface{}, writer Writer, cancel func(error)) {
 				v := item.(int)
 				if v%3 == 0 {
-					cancel(errMapReduceDummy)
+					cancel(errDummy)
 				}
 				writer.Write(v * v)
 			},
-			expectErr: errMapReduceDummy,
+			expectErr: errDummy,
 		},
 		{
 			name: "cancel with nil",
@@ -161,12 +161,12 @@ func TestMapReduce(t *testing.T) {
 				for item := range pipe {
 					result += item.(int)
 					if result > 10 {
-						cancel(errMapReduceDummy)
+						cancel(errDummy)
 					}
 				}
 				writer.Write(result)
 			},
-			expectErr: errMapReduceDummy,
+			expectErr: errDummy,
 		},
 	}
 
@@ -234,11 +234,11 @@ func TestMapReduceVoid(t *testing.T) {
 			mapper: func(item interface{}, writer Writer, cancel func(error)) {
 				v := item.(int)
 				if v%3 == 0 {
-					cancel(errMapReduceDummy)
+					cancel(errDummy)
 				}
 				writer.Write(v * v)
 			},
-			expectErr: errMapReduceDummy,
+			expectErr: errDummy,
 		},
 		{
 			name: "cancel with nil",
@@ -257,11 +257,11 @@ func TestMapReduceVoid(t *testing.T) {
 				for item := range pipe {
 					result := atomic.AddUint32(&value, uint32(item.(int)))
 					if result > 10 {
-						cancel(errMapReduceDummy)
+						cancel(errDummy)
 					}
 				}
 			},
-			expectErr: errMapReduceDummy,
+			expectErr: errDummy,
 		},
 	}
 
