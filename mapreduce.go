@@ -90,9 +90,9 @@ func Map(generate GenerateFunc, mapper MapFunc, opts ...Option) chan interface{}
 	options := buildOptions(opts...)
 	source := buildSource(generate)
 	collector := make(chan interface{}, options.workers)
-	done := NewDoneChan()
+	done := make(chan struct{})
 
-	go executeMappers(options.ctx, mapper, source, collector, done.Done(), options.workers)
+	go executeMappers(options.ctx, mapper, source, collector, done, options.workers)
 
 	return collector
 }
@@ -117,13 +117,13 @@ func MapReduceWithSource(source <-chan interface{}, mapper MapperFunc, reducer R
 	}()
 
 	collector := make(chan interface{}, options.workers)
-	done := NewDoneChan()
-	writer := newGuardedWriter(options.ctx, output, done.Done())
+	done := make(chan struct{})
+	writer := newGuardedWriter(options.ctx, output, done)
 	var closeOnce sync.Once
 	var retErr AtomicError
 	finish := func() {
 		closeOnce.Do(func() {
-			done.Close()
+			close(done)
 			close(output)
 		})
 	}
@@ -154,7 +154,7 @@ func MapReduceWithSource(source <-chan interface{}, mapper MapperFunc, reducer R
 
 	go executeMappers(options.ctx, func(item interface{}, w Writer) {
 		mapper(item, w, cancel)
-	}, source, collector, done.Done(), options.workers)
+	}, source, collector, done, options.workers)
 
 	value, ok := <-output
 	if err := retErr.Load(); err != nil {
