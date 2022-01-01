@@ -36,7 +36,7 @@
 
 以上实际都是在进行对输入数据进行处理最后输出清洗后的数据，针对数据处理有个非常经典的异步模式：生产者消费者模式。于是我们可以抽象一下数据批处理的生命周期，大致可以分为三个阶段：
 
-![](https://cdn.learnku.com/uploads/images/202112/27/73865/Ct2DlYTVZW.png!large)
+![](https://raw.githubusercontent.com/zeromicro/zero-doc/main/doc/images/mapreduce-serial-cn.png)
 
 1. 数据生产 generate
 2. 数据加工 mapper
@@ -46,12 +46,12 @@
 
 再来思考一下不同阶段之间数据应该如何流转，既然不同阶段的数据处理都是由不同 goroutine 执行的，那么很自然的可以考虑采用 channel 来实现 goroutine 之间的通信。
 
-![](https://cdn.learnku.com/uploads/images/202112/27/73865/JPazVK6rRf.png!large)
+![](https://raw.githubusercontent.com/zeromicro/zero-doc/main/doc/images/mapreduce-cn.png)
 
 
 如何实现随时终止流程呢？
 
-很简单，goroutine 中监听一个全局的结束 channel 就行。
+`goroutine` 中监听一个全局的结束 `channel` 和调用方提供的 `ctx` 就行。
 
 ## 简单示例
 
@@ -91,6 +91,8 @@ func main() {
     fmt.Println("result:", val)
 }
 ```
+
+更多示例：[https://github.com/zeromicro/zero-examples/tree/main/mapreduce](https://github.com/zeromicro/zero-examples/tree/main/mapreduce)
 
 ## 强烈推荐！
 

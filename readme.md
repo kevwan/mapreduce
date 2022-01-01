@@ -23,7 +23,7 @@ Let's try to put ourselves in the author's shoes and sort out the possible busin
 
 The above is actually processing the input data and finally outputting the cleaned data. There is a very classic asynchronous pattern for data processing: the producer-consumer pattern. So we can abstract the life cycle of data batch processing, which can be roughly divided into three phases.
 
-![](https://cdn.learnku.com/uploads/images/202112/27/73865/aGKm4Lgw5r.png!large)
+![](https://raw.githubusercontent.com/zeromicro/zero-doc/main/doc/images/mapreduce-serial-en.png)
 
 1. data production generate
 2. data processing mapper
@@ -33,11 +33,11 @@ Data producing is an indispensable stage, data processing and data aggregation a
 
 Since different stages of data processing are performed by different goroutines, it is natural to consider the use of channel to achieve communication between goroutines.
 
-![](https://cdn.learnku.com/uploads/images/202112/27/73865/qoucKqA8jH.png!large)
+![](https://raw.githubusercontent.com/zeromicro/zero-doc/main/doc/images/mapreduce-en.png)
 
 How can I terminate the process at any time?
 
-It's simple, just listen to a global end channel or the given context in the goroutine.
+It's simple, just receive from a  channel or the given context in the goroutine.
 
 ## A simple example
 
@@ -77,6 +77,8 @@ func main() {
     fmt.Println("result:", val)
 }
 ```
+
+More examples: [https://github.com/zeromicro/zero-examples/tree/main/mapreduce](https://github.com/zeromicro/zero-examples/tree/main/mapreduce)
 
 ## References
 
