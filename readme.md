@@ -10,9 +10,24 @@ English | [简体中文](readme-cn.md)
 [![Release](https://img.shields.io/github/v/release/kevwan/mapreduce.svg?style=flat-square)](https://github.com/kevwan/mapreduce)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-## Why we have this repo?
+## Why we have this repo
 
 `mapreduce` is part of [go-zero](https://github.com/zeromicro/go-zero), but a few people asked if mapreduce can be used separately. But I recommend you to use `go-zero` for many more features.
+
+## Why MapReduce is needed
+
+In practical business scenarios we often need to get the corresponding properties from different rpc services to assemble complex objects.
+
+For example, to query product details.
+
+1. product service - query product attributes
+2. inventory service - query inventory properties
+3. price service - query price attributes
+4. marketing service - query marketing properties
+
+If it is a serial call, the response time will increase linearly with the number of rpc calls, so we will generally change serial to parallel to optimize response time.
+
+Simple scenarios using `WaitGroup` can also meet the needs, but what if we need to check the data returned by the rpc call, data processing, data aggregation? The official go library does not have such a tool (CompleteFuture is provided in java), so we implemented an in-process data batching MapReduce concurrent tool based on the MapReduce architecture.
 
 ## Design ideas
 
