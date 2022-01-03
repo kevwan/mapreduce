@@ -31,7 +31,7 @@ Simple scenarios using `WaitGroup` can also meet the needs, but what if we need 
 
 ## Design ideas
 
-Let's try to put ourselves in the author's shoes and sort out the possible business scenarios for the concurrency tool:
+Let's sort out the possible business scenarios for the concurrency tool:
 
 1. querying product details: supporting concurrent calls to multiple services to combine product attributes, and supporting call errors that can be ended immediately.
 2. automatic recommendation of user card coupons on product details page: support concurrently verifying card coupons, automatically rejecting them if they fail, and returning all of them.
