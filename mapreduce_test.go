@@ -337,7 +337,7 @@ func TestMapReducePanic(t *testing.T) {
 			panic("panic")
 		}
 	})
-	assert.Nil(t, v)
+	assert.Equal(t, 0, v)
 	assert.NotNil(t, err)
 	assert.Equal(t, "panic", err.Error())
 }
@@ -398,7 +398,7 @@ func TestMapReduceWithoutReducerWrite(t *testing.T) {
 		// not calling writer.Write(...), should not panic
 	})
 	assert.Equal(t, ErrReduceNoOutput, err)
-	assert.Nil(t, res)
+	assert.Equal(t, 0, res)
 }
 
 func TestMapReduceVoidPanicInReducer(t *testing.T) {
