@@ -56,7 +56,7 @@ func Finish(fns ...func() error) error {
 		return nil
 	}
 
-	return MapReduceVoid[func() error](func(source chan<- func() error) {
+	return MapReduceVoid(func(source chan<- func() error) {
 		for _, fn := range fns {
 			source <- fn
 		}
@@ -101,8 +101,8 @@ func Map[T, U any](generate GenerateFunc[T], mapper MapFunc[T, U], opts ...Optio
 // and reduces the output elements with given reducer.
 func MapReduce[T, U, V any](generate GenerateFunc[T], mapper MapperFunc[T, U], reducer ReducerFunc[U, V],
 	opts ...Option) (V, error) {
-	source := buildSource[T](generate)
-	return MapReduceWithSource[T, U, V](source, mapper, reducer, opts...)
+	source := buildSource(generate)
+	return MapReduceWithSource(source, mapper, reducer, opts...)
 }
 
 // MapReduceWithSource maps all elements from source, and reduce the output elements with given reducer.
@@ -141,7 +141,7 @@ func MapReduceWithSource[T, U, V any](source <-chan T, mapper MapperFunc[T, U], 
 
 	go func() {
 		defer func() {
-			drain[U](collector)
+			drain(collector)
 
 			if r := recover(); r != nil {
 				cancel(fmt.Errorf("%v", r))
@@ -159,7 +159,7 @@ func MapReduceWithSource[T, U, V any](source <-chan T, mapper MapperFunc[T, U], 
 	}, source, collector, done, options.workers)
 
 	value, ok := <-output
-	if e := retErr.Load(); err != nil {
+	if e := retErr.Load(); e != nil {
 		err = e.(error)
 	} else if ok {
 		val = value
@@ -174,7 +174,7 @@ func MapReduceWithSource[T, U, V any](source <-chan T, mapper MapperFunc[T, U], 
 // and reduce the output elements with given reducer.
 func MapReduceVoid[T, U any](generate GenerateFunc[T], mapper MapperFunc[T, U],
 	reducer VoidReducerFunc[U], opts ...Option) error {
-	_, err := MapReduce[T, U, interface{}](generate, mapper, func(input <-chan U,
+	_, err := MapReduce(generate, mapper, func(input <-chan U,
 		writer Writer[interface{}], cancel func(error)) {
 		reducer(input, cancel)
 		// We need to write a placeholder to let MapReduce to continue on reducer done,
