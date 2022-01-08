@@ -6,6 +6,7 @@ import (
 	"io/ioutil"
 	"log"
 	"runtime"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -76,21 +77,19 @@ func TestFinishVoid(t *testing.T) {
 func TestMap(t *testing.T) {
 	tests := []struct {
 		name   string
-		mapper MapFunc
+		mapper MapFunc[int, int]
 		expect int
 	}{
 		{
 			name: "simple",
-			mapper: func(item interface{}, writer Writer) {
-				v := item.(int)
+			mapper: func(v int, writer Writer[int]) {
 				writer.Write(v * v)
 			},
 			expect: 30,
 		},
 		{
 			name: "half",
-			mapper: func(item interface{}, writer Writer) {
-				v := item.(int)
+			mapper: func(v int, writer Writer[int]) {
 				if v%2 == 0 {
 					return
 				}
@@ -102,7 +101,7 @@ func TestMap(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			channel := Map(func(source chan<- interface{}) {
+			channel := Map(func(source chan<- int) {
 				for i := 1; i < 5; i++ {
 					source <- i
 				}
@@ -110,7 +109,7 @@ func TestMap(t *testing.T) {
 
 			var result int
 			for v := range channel {
-				result += v.(int)
+				result += v
 			}
 
 			assert.Equal(t, test.expect, result)
@@ -121,10 +120,10 @@ func TestMap(t *testing.T) {
 func TestMapReduce(t *testing.T) {
 	tests := []struct {
 		name        string
-		mapper      MapperFunc
-		reducer     ReducerFunc
+		mapper      MapperFunc[int, int]
+		reducer     ReducerFunc[int, int]
 		expectErr   error
-		expectValue interface{}
+		expectValue int
 	}{
 		{
 			name:        "simple",
@@ -133,8 +132,7 @@ func TestMapReduce(t *testing.T) {
 		},
 		{
 			name: "cancel with error",
-			mapper: func(item interface{}, writer Writer, cancel func(error)) {
-				v := item.(int)
+			mapper: func(v int, writer Writer[int], cancel func(error)) {
 				if v%3 == 0 {
 					cancel(errDummy)
 				}
@@ -144,22 +142,21 @@ func TestMapReduce(t *testing.T) {
 		},
 		{
 			name: "cancel with nil",
-			mapper: func(item interface{}, writer Writer, cancel func(error)) {
-				v := item.(int)
+			mapper: func(v int, writer Writer[int], cancel func(error)) {
 				if v%3 == 0 {
 					cancel(nil)
 				}
 				writer.Write(v * v)
 			},
 			expectErr:   ErrCancelWithNil,
-			expectValue: nil,
+			expectValue: 0,
 		},
 		{
 			name: "cancel with more",
-			reducer: func(pipe <-chan interface{}, writer Writer, cancel func(error)) {
+			reducer: func(pipe <-chan int, writer Writer[int], cancel func(error)) {
 				var result int
 				for item := range pipe {
-					result += item.(int)
+					result += item
 					if result > 10 {
 						cancel(errDummy)
 					}
@@ -173,21 +170,21 @@ func TestMapReduce(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			if test.mapper == nil {
-				test.mapper = func(item interface{}, writer Writer, cancel func(error)) {
-					v := item.(int)
+				test.mapper = func(item int, writer Writer[int], cancel func(error)) {
+					v := item
 					writer.Write(v * v)
 				}
 			}
 			if test.reducer == nil {
-				test.reducer = func(pipe <-chan interface{}, writer Writer, cancel func(error)) {
+				test.reducer = func(pipe <-chan int, writer Writer[int], cancel func(error)) {
 					var result int
 					for item := range pipe {
-						result += item.(int)
+						result += item
 					}
 					writer.Write(result)
 				}
 			}
-			value, err := MapReduce(func(source chan<- interface{}) {
+			value, err := MapReduce(func(source chan<- int) {
 				for i := 1; i < 5; i++ {
 					source <- i
 				}
@@ -201,13 +198,13 @@ func TestMapReduce(t *testing.T) {
 
 func TestMapReduceWithReduerWriteMoreThanOnce(t *testing.T) {
 	assert.Panics(t, func() {
-		MapReduce(func(source chan<- interface{}) {
+		MapReduce(func(source chan<- int) {
 			for i := 0; i < 10; i++ {
 				source <- i
 			}
-		}, func(item interface{}, writer Writer, cancel func(error)) {
-			writer.Write(item)
-		}, func(pipe <-chan interface{}, writer Writer, cancel func(error)) {
+		}, func(item int, writer Writer[string], cancel func(error)) {
+			writer.Write(strconv.Itoa(item))
+		}, func(pipe <-chan string, writer Writer[string], cancel func(error)) {
 			drain(pipe)
 			writer.Write("one")
 			writer.Write("two")
@@ -219,8 +216,8 @@ func TestMapReduceVoid(t *testing.T) {
 	var value uint32
 	tests := []struct {
 		name        string
-		mapper      MapperFunc
-		reducer     VoidReducerFunc
+		mapper      MapperFunc[int, int]
+		reducer     VoidReducerFunc[int]
 		expectValue uint32
 		expectErr   error
 	}{
@@ -231,8 +228,7 @@ func TestMapReduceVoid(t *testing.T) {
 		},
 		{
 			name: "cancel with error",
-			mapper: func(item interface{}, writer Writer, cancel func(error)) {
-				v := item.(int)
+			mapper: func(v int, writer Writer[int], cancel func(error)) {
 				if v%3 == 0 {
 					cancel(errDummy)
 				}
@@ -242,8 +238,7 @@ func TestMapReduceVoid(t *testing.T) {
 		},
 		{
 			name: "cancel with nil",
-			mapper: func(item interface{}, writer Writer, cancel func(error)) {
-				v := item.(int)
+			mapper: func(v int, writer Writer[int], cancel func(error)) {
 				if v%3 == 0 {
 					cancel(nil)
 				}
@@ -253,9 +248,9 @@ func TestMapReduceVoid(t *testing.T) {
 		},
 		{
 			name: "cancel with more",
-			reducer: func(pipe <-chan interface{}, cancel func(error)) {
+			reducer: func(pipe <-chan int, cancel func(error)) {
 				for item := range pipe {
-					result := atomic.AddUint32(&value, uint32(item.(int)))
+					result := atomic.AddUint32(&value, uint32(item))
 					if result > 10 {
 						cancel(errDummy)
 					}
@@ -270,19 +265,18 @@ func TestMapReduceVoid(t *testing.T) {
 			atomic.StoreUint32(&value, 0)
 
 			if test.mapper == nil {
-				test.mapper = func(item interface{}, writer Writer, cancel func(error)) {
-					v := item.(int)
+				test.mapper = func(v int, writer Writer[int], cancel func(error)) {
 					writer.Write(v * v)
 				}
 			}
 			if test.reducer == nil {
-				test.reducer = func(pipe <-chan interface{}, cancel func(error)) {
+				test.reducer = func(pipe <-chan int, cancel func(error)) {
 					for item := range pipe {
-						atomic.AddUint32(&value, uint32(item.(int)))
+						atomic.AddUint32(&value, uint32(item))
 					}
 				}
 			}
-			err := MapReduceVoid(func(source chan<- interface{}) {
+			err := MapReduceVoid(func(source chan<- int) {
 				for i := 1; i < 5; i++ {
 					source <- i
 				}
@@ -298,18 +292,17 @@ func TestMapReduceVoid(t *testing.T) {
 
 func TestMapReduceVoidWithDelay(t *testing.T) {
 	var result []int
-	err := MapReduceVoid(func(source chan<- interface{}) {
+	err := MapReduceVoid(func(source chan<- int) {
 		source <- 0
 		source <- 1
-	}, func(item interface{}, writer Writer, cancel func(error)) {
-		i := item.(int)
+	}, func(i int, writer Writer[int], cancel func(error)) {
 		if i == 0 {
 			time.Sleep(time.Millisecond * 50)
 		}
 		writer.Write(i)
-	}, func(pipe <-chan interface{}, cancel func(error)) {
+	}, func(pipe <-chan int, cancel func(error)) {
 		for item := range pipe {
-			i := item.(int)
+			i := item
 			result = append(result, i)
 		}
 	})
@@ -322,11 +315,11 @@ func TestMapReduceVoidWithDelay(t *testing.T) {
 func TestMapVoid(t *testing.T) {
 	const tasks = 1000
 	var count uint32
-	MapVoid(func(source chan<- interface{}) {
+	MapVoid(func(source chan<- int) {
 		for i := 0; i < tasks; i++ {
 			source <- i
 		}
-	}, func(item interface{}) {
+	}, func(item int) {
 		atomic.AddUint32(&count, 1)
 	})
 
@@ -334,13 +327,12 @@ func TestMapVoid(t *testing.T) {
 }
 
 func TestMapReducePanic(t *testing.T) {
-	v, err := MapReduce(func(source chan<- interface{}) {
+	v, err := MapReduce(func(source chan<- int) {
 		source <- 0
 		source <- 1
-	}, func(item interface{}, writer Writer, cancel func(error)) {
-		i := item.(int)
+	}, func(i int, writer Writer[int], cancel func(error)) {
 		writer.Write(i)
-	}, func(pipe <-chan interface{}, writer Writer, cancel func(error)) {
+	}, func(pipe <-chan int, writer Writer[int], cancel func(error)) {
 		for range pipe {
 			panic("panic")
 		}
@@ -352,18 +344,17 @@ func TestMapReducePanic(t *testing.T) {
 
 func TestMapReduceVoidCancel(t *testing.T) {
 	var result []int
-	err := MapReduceVoid(func(source chan<- interface{}) {
+	err := MapReduceVoid(func(source chan<- int) {
 		source <- 0
 		source <- 1
-	}, func(item interface{}, writer Writer, cancel func(error)) {
-		i := item.(int)
+	}, func(i int, writer Writer[int], cancel func(error)) {
 		if i == 1 {
 			cancel(errors.New("anything"))
 		}
 		writer.Write(i)
-	}, func(pipe <-chan interface{}, cancel func(error)) {
+	}, func(pipe <-chan int, cancel func(error)) {
 		for item := range pipe {
-			i := item.(int)
+			i := item
 			result = append(result, i)
 		}
 	})
@@ -374,21 +365,19 @@ func TestMapReduceVoidCancel(t *testing.T) {
 func TestMapReduceVoidCancelWithRemains(t *testing.T) {
 	var done int32
 	var result []int
-	err := MapReduceVoid(func(source chan<- interface{}) {
+	err := MapReduceVoid(func(source chan<- int) {
 		for i := 0; i < defaultWorkers*2; i++ {
 			source <- i
 		}
 		atomic.AddInt32(&done, 1)
-	}, func(item interface{}, writer Writer, cancel func(error)) {
-		i := item.(int)
+	}, func(i int, writer Writer[int], cancel func(error)) {
 		if i == defaultWorkers/2 {
 			cancel(errors.New("anything"))
 		}
 		writer.Write(i)
-	}, func(pipe <-chan interface{}, cancel func(error)) {
+	}, func(pipe <-chan int, cancel func(error)) {
 		for item := range pipe {
-			i := item.(int)
-			result = append(result, i)
+			result = append(result, item)
 		}
 	})
 	assert.NotNil(t, err)
@@ -398,13 +387,13 @@ func TestMapReduceVoidCancelWithRemains(t *testing.T) {
 
 func TestMapReduceWithoutReducerWrite(t *testing.T) {
 	uids := []int{1, 2, 3}
-	res, err := MapReduce(func(source chan<- interface{}) {
+	res, err := MapReduce(func(source chan<- int) {
 		for _, uid := range uids {
 			source <- uid
 		}
-	}, func(item interface{}, writer Writer, cancel func(error)) {
+	}, func(item int, writer Writer[int], cancel func(error)) {
 		writer.Write(item)
-	}, func(pipe <-chan interface{}, writer Writer, cancel func(error)) {
+	}, func(pipe <-chan int, writer Writer[int], cancel func(error)) {
 		drain(pipe)
 		// not calling writer.Write(...), should not panic
 	})
@@ -415,15 +404,14 @@ func TestMapReduceWithoutReducerWrite(t *testing.T) {
 func TestMapReduceVoidPanicInReducer(t *testing.T) {
 	const message = "foo"
 	var done int32
-	err := MapReduceVoid(func(source chan<- interface{}) {
+	err := MapReduceVoid(func(source chan<- int) {
 		for i := 0; i < defaultWorkers*2; i++ {
 			source <- i
 		}
 		atomic.AddInt32(&done, 1)
-	}, func(item interface{}, writer Writer, cancel func(error)) {
-		i := item.(int)
+	}, func(i int, writer Writer[int], cancel func(error)) {
 		writer.Write(i)
-	}, func(pipe <-chan interface{}, cancel func(error)) {
+	}, func(pipe <-chan int, cancel func(error)) {
 		panic(message)
 	}, WithWorkers(1))
 	assert.NotNil(t, err)
@@ -435,21 +423,19 @@ func TestMapReduceWithContext(t *testing.T) {
 	var done int32
 	var result []int
 	ctx, cancel := context.WithCancel(context.Background())
-	err := MapReduceVoid(func(source chan<- interface{}) {
+	err := MapReduceVoid(func(source chan<- int) {
 		for i := 0; i < defaultWorkers*2; i++ {
 			source <- i
 		}
 		atomic.AddInt32(&done, 1)
-	}, func(item interface{}, writer Writer, c func(error)) {
-		i := item.(int)
+	}, func(i int, writer Writer[int], c func(error)) {
 		if i == defaultWorkers/2 {
 			cancel()
 		}
 		writer.Write(i)
-	}, func(pipe <-chan interface{}, cancel func(error)) {
+	}, func(pipe <-chan int, cancel func(error)) {
 		for item := range pipe {
-			i := item.(int)
-			result = append(result, i)
+			result = append(result, item)
 		}
 	}, WithContext(ctx))
 	assert.NotNil(t, err)
@@ -459,19 +445,19 @@ func TestMapReduceWithContext(t *testing.T) {
 func BenchmarkMapReduce(b *testing.B) {
 	b.ReportAllocs()
 
-	mapper := func(v interface{}, writer Writer, cancel func(error)) {
-		writer.Write(v.(int64) * v.(int64))
+	mapper := func(v int64, writer Writer[int64], cancel func(error)) {
+		writer.Write(v * v)
 	}
-	reducer := func(input <-chan interface{}, writer Writer, cancel func(error)) {
+	reducer := func(input <-chan int64, writer Writer[int64], cancel func(error)) {
 		var result int64
 		for v := range input {
-			result += v.(int64)
+			result += v
 		}
 		writer.Write(result)
 	}
 
 	for i := 0; i < b.N; i++ {
-		MapReduce(func(input chan<- interface{}) {
+		MapReduce(func(input chan<- int64) {
 			for j := 0; j < 2; j++ {
 				input <- int64(j)
 			}

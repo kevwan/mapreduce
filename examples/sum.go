@@ -8,17 +8,16 @@ import (
 )
 
 func main() {
-	val, err := mapreduce.MapReduce(func(source chan<- interface{}) {
+	val, err := mapreduce.MapReduce(func(source chan<- int) {
 		for i := 0; i < 10; i++ {
 			source <- i
 		}
-	}, func(item interface{}, writer mapreduce.Writer, cancel func(error)) {
-		i := item.(int)
+	}, func(i int, writer mapreduce.Writer[int], cancel func(error)) {
 		writer.Write(i * i)
-	}, func(pipe <-chan interface{}, writer mapreduce.Writer, cancel func(error)) {
+	}, func(pipe <-chan int, writer mapreduce.Writer[int], cancel func(error)) {
 		var sum int
 		for i := range pipe {
-			sum += i.(int)
+			sum += i
 		}
 		writer.Write(sum)
 	})
