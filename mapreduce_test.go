@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"go.uber.org/goleak"
 )
 
 var errDummy = errors.New("dummy")
@@ -20,6 +21,8 @@ func init() {
 }
 
 func TestFinish(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
 	var total uint32
 	err := Finish(func() error {
 		atomic.AddUint32(&total, 2)
@@ -37,14 +40,20 @@ func TestFinish(t *testing.T) {
 }
 
 func TestFinishNone(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
 	assert.Nil(t, Finish())
 }
 
 func TestFinishVoidNone(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
 	FinishVoid()
 }
 
 func TestFinishErr(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
 	var total uint32
 	err := Finish(func() error {
 		atomic.AddUint32(&total, 2)
@@ -61,6 +70,8 @@ func TestFinishErr(t *testing.T) {
 }
 
 func TestFinishVoid(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
 	var total uint32
 	FinishVoid(func() {
 		atomic.AddUint32(&total, 2)
@@ -73,52 +84,93 @@ func TestFinishVoid(t *testing.T) {
 	assert.Equal(t, uint32(10), atomic.LoadUint32(&total))
 }
 
-func TestMap(t *testing.T) {
-	tests := []struct {
-		name   string
-		mapper MapFunc
-		expect int
-	}{
-		{
-			name: "simple",
-			mapper: func(item interface{}, writer Writer) {
-				v := item.(int)
-				writer.Write(v * v)
-			},
-			expect: 30,
-		},
-		{
-			name: "half",
-			mapper: func(item interface{}, writer Writer) {
-				v := item.(int)
-				if v%2 == 0 {
-					return
-				}
-				writer.Write(v * v)
-			},
-			expect: 10,
-		},
-	}
+func TestForEach(t *testing.T) {
+	const tasks = 1000
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			channel := Map(func(source chan<- interface{}) {
-				for i := 1; i < 5; i++ {
+	t.Run("all", func(t *testing.T) {
+		defer goleak.VerifyNone(t)
+
+		var count uint32
+		ForEach(func(source chan<- interface{}) {
+			for i := 0; i < tasks; i++ {
+				source <- i
+			}
+		}, func(item interface{}) {
+			atomic.AddUint32(&count, 1)
+		}, WithWorkers(-1))
+
+		assert.Equal(t, tasks, int(count))
+	})
+
+	t.Run("odd", func(t *testing.T) {
+		defer goleak.VerifyNone(t)
+
+		var count uint32
+		ForEach(func(source chan<- interface{}) {
+			for i := 0; i < tasks; i++ {
+				source <- i
+			}
+		}, func(item interface{}) {
+			if item.(int)%2 == 0 {
+				atomic.AddUint32(&count, 1)
+			}
+		})
+
+		assert.Equal(t, tasks/2, int(count))
+	})
+
+	t.Run("all", func(t *testing.T) {
+		defer goleak.VerifyNone(t)
+
+		assert.PanicsWithValue(t, "foo", func() {
+			ForEach(func(source chan<- interface{}) {
+				for i := 0; i < tasks; i++ {
 					source <- i
 				}
-			}, test.mapper, WithWorkers(-1))
-
-			var result int
-			for v := range channel {
-				result += v.(int)
-			}
-
-			assert.Equal(t, test.expect, result)
+			}, func(item interface{}) {
+				panic("foo")
+			})
 		})
-	}
+	})
+}
+
+func TestGeneratePanic(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	t.Run("all", func(t *testing.T) {
+		assert.PanicsWithValue(t, "foo", func() {
+			ForEach(func(source chan<- interface{}) {
+				panic("foo")
+			}, func(item interface{}) {
+			})
+		})
+	})
+}
+
+func TestMapperPanic(t *testing.T) {
+	const tasks = 1000
+
+	defer goleak.VerifyNone(t)
+
+	t.Run("all", func(t *testing.T) {
+		assert.PanicsWithValue(t, "foo", func() {
+			_, _ = MapReduce(func(source chan<- interface{}) {
+				for i := 0; i < tasks; i++ {
+					source <- i
+				}
+			}, func(item interface{}, writer Writer, cancel func(error)) {
+				panic("foo")
+			}, func(pipe <-chan interface{}, writer Writer, cancel func(error)) {
+				for range pipe {
+				}
+			})
+		})
+	})
 }
 
 func TestMapReduce(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
 	tests := []struct {
 		name        string
 		mapper      MapperFunc
@@ -170,36 +222,74 @@ func TestMapReduce(t *testing.T) {
 		},
 	}
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if test.mapper == nil {
-				test.mapper = func(item interface{}, writer Writer, cancel func(error)) {
-					v := item.(int)
-					writer.Write(v * v)
-				}
-			}
-			if test.reducer == nil {
-				test.reducer = func(pipe <-chan interface{}, writer Writer, cancel func(error)) {
-					var result int
-					for item := range pipe {
-						result += item.(int)
+	t.Run("MapReduce", func(t *testing.T) {
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				if test.mapper == nil {
+					test.mapper = func(item interface{}, writer Writer, cancel func(error)) {
+						v := item.(int)
+						writer.Write(v * v)
 					}
-					writer.Write(result)
 				}
-			}
-			value, err := MapReduce(func(source chan<- interface{}) {
-				for i := 1; i < 5; i++ {
-					source <- i
+				if test.reducer == nil {
+					test.reducer = func(pipe <-chan interface{}, writer Writer, cancel func(error)) {
+						var result int
+						for item := range pipe {
+							result += item.(int)
+						}
+						writer.Write(result)
+					}
 				}
-			}, test.mapper, test.reducer, WithWorkers(runtime.NumCPU()))
+				value, err := MapReduce(func(source chan<- interface{}) {
+					for i := 1; i < 5; i++ {
+						source <- i
+					}
+				}, test.mapper, test.reducer, WithWorkers(runtime.NumCPU()))
 
-			assert.Equal(t, test.expectErr, err)
-			assert.Equal(t, test.expectValue, value)
-		})
-	}
+				assert.Equal(t, test.expectErr, err)
+				assert.Equal(t, test.expectValue, value)
+			})
+		}
+	})
+
+	t.Run("MapReduce", func(t *testing.T) {
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				if test.mapper == nil {
+					test.mapper = func(item interface{}, writer Writer, cancel func(error)) {
+						v := item.(int)
+						writer.Write(v * v)
+					}
+				}
+				if test.reducer == nil {
+					test.reducer = func(pipe <-chan interface{}, writer Writer, cancel func(error)) {
+						var result int
+						for item := range pipe {
+							result += item.(int)
+						}
+						writer.Write(result)
+					}
+				}
+
+				source := make(chan interface{})
+				go func() {
+					for i := 1; i < 5; i++ {
+						source <- i
+					}
+					close(source)
+				}()
+
+				value, err := MapReduceChan(source, test.mapper, test.reducer, WithWorkers(-1))
+				assert.Equal(t, test.expectErr, err)
+				assert.Equal(t, test.expectValue, value)
+			})
+		}
+	})
 }
 
 func TestMapReduceWithReduerWriteMoreThanOnce(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
 	assert.Panics(t, func() {
 		MapReduce(func(source chan<- interface{}) {
 			for i := 0; i < 10; i++ {
@@ -216,6 +306,8 @@ func TestMapReduceWithReduerWriteMoreThanOnce(t *testing.T) {
 }
 
 func TestMapReduceVoid(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
 	var value uint32
 	tests := []struct {
 		name        string
@@ -297,6 +389,8 @@ func TestMapReduceVoid(t *testing.T) {
 }
 
 func TestMapReduceVoidWithDelay(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
 	var result []int
 	err := MapReduceVoid(func(source chan<- interface{}) {
 		source <- 0
@@ -319,38 +413,27 @@ func TestMapReduceVoidWithDelay(t *testing.T) {
 	assert.Equal(t, 0, result[1])
 }
 
-func TestMapVoid(t *testing.T) {
-	const tasks = 1000
-	var count uint32
-	MapVoid(func(source chan<- interface{}) {
-		for i := 0; i < tasks; i++ {
-			source <- i
-		}
-	}, func(item interface{}) {
-		atomic.AddUint32(&count, 1)
-	})
-
-	assert.Equal(t, tasks, int(count))
-}
-
 func TestMapReducePanic(t *testing.T) {
-	v, err := MapReduce(func(source chan<- interface{}) {
-		source <- 0
-		source <- 1
-	}, func(item interface{}, writer Writer, cancel func(error)) {
-		i := item.(int)
-		writer.Write(i)
-	}, func(pipe <-chan interface{}, writer Writer, cancel func(error)) {
-		for range pipe {
-			panic("panic")
-		}
+	defer goleak.VerifyNone(t)
+
+	assert.Panics(t, func() {
+		_, _ = MapReduce(func(source chan<- interface{}) {
+			source <- 0
+			source <- 1
+		}, func(item interface{}, writer Writer, cancel func(error)) {
+			i := item.(int)
+			writer.Write(i)
+		}, func(pipe <-chan interface{}, writer Writer, cancel func(error)) {
+			for range pipe {
+				panic("panic")
+			}
+		})
 	})
-	assert.Nil(t, v)
-	assert.NotNil(t, err)
-	assert.Equal(t, "panic", err.Error())
 }
 
 func TestMapReduceVoidCancel(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
 	var result []int
 	err := MapReduceVoid(func(source chan<- interface{}) {
 		source <- 0
@@ -372,6 +455,8 @@ func TestMapReduceVoidCancel(t *testing.T) {
 }
 
 func TestMapReduceVoidCancelWithRemains(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
 	var done int32
 	var result []int
 	err := MapReduceVoid(func(source chan<- interface{}) {
@@ -397,6 +482,8 @@ func TestMapReduceVoidCancelWithRemains(t *testing.T) {
 }
 
 func TestMapReduceWithoutReducerWrite(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
 	uids := []int{1, 2, 3}
 	res, err := MapReduce(func(source chan<- interface{}) {
 		for _, uid := range uids {
@@ -413,25 +500,46 @@ func TestMapReduceWithoutReducerWrite(t *testing.T) {
 }
 
 func TestMapReduceVoidPanicInReducer(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
 	const message = "foo"
+	assert.Panics(t, func() {
+		var done int32
+		_ = MapReduceVoid(func(source chan<- interface{}) {
+			for i := 0; i < defaultWorkers*2; i++ {
+				source <- i
+			}
+			atomic.AddInt32(&done, 1)
+		}, func(item interface{}, writer Writer, cancel func(error)) {
+			i := item.(int)
+			writer.Write(i)
+		}, func(pipe <-chan interface{}, cancel func(error)) {
+			panic(message)
+		}, WithWorkers(1))
+	})
+}
+
+func TestForEachWithContext(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
 	var done int32
-	err := MapReduceVoid(func(source chan<- interface{}) {
+	ctx, cancel := context.WithCancel(context.Background())
+	ForEach(func(source chan<- interface{}) {
 		for i := 0; i < defaultWorkers*2; i++ {
 			source <- i
 		}
 		atomic.AddInt32(&done, 1)
-	}, func(item interface{}, writer Writer, cancel func(error)) {
+	}, func(item interface{}) {
 		i := item.(int)
-		writer.Write(i)
-	}, func(pipe <-chan interface{}, cancel func(error)) {
-		panic(message)
-	}, WithWorkers(1))
-	assert.NotNil(t, err)
-	assert.Equal(t, message, err.Error())
-	assert.Equal(t, int32(1), done)
+		if i == defaultWorkers/2 {
+			cancel()
+		}
+	}, WithContext(ctx))
 }
 
 func TestMapReduceWithContext(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
 	var done int32
 	var result []int
 	ctx, cancel := context.WithCancel(context.Background())
@@ -453,7 +561,7 @@ func TestMapReduceWithContext(t *testing.T) {
 		}
 	}, WithContext(ctx))
 	assert.NotNil(t, err)
-	assert.Equal(t, ErrReduceNoOutput, err)
+	assert.Equal(t, context.DeadlineExceeded, err)
 }
 
 func BenchmarkMapReduce(b *testing.B) {

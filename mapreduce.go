@@ -3,7 +3,6 @@ package mapreduce
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 	"sync/atomic"
 )
@@ -21,12 +20,12 @@ var (
 )
 
 type (
+	// ForEachFunc is used to do element processing, but no output.
+	ForEachFunc func(item interface{})
 	// GenerateFunc is used to let callers send elements into source.
 	GenerateFunc func(source chan<- interface{})
 	// MapFunc is used to do element processing and write the output to writer.
 	MapFunc func(item interface{}, writer Writer)
-	// VoidMapFunc is used to do element processing, but no output.
-	VoidMapFunc func(item interface{})
 	// MapperFunc is used to do element processing and write the output to writer,
 	// use cancel func to cancel the processing.
 	MapperFunc func(item interface{}, writer Writer, cancel func(error))
@@ -38,6 +37,16 @@ type (
 	VoidReducerFunc func(pipe <-chan interface{}, cancel func(error))
 	// Option defines the method to customize the mapreduce.
 	Option func(opts *mapReduceOptions)
+
+	mapperContext struct {
+		ctx       context.Context
+		mapper    MapFunc
+		source    <-chan interface{}
+		panicChan *onceChan
+		collector chan<- interface{}
+		doneChan  <-chan struct{}
+		workers   int
+	}
 
 	mapReduceOptions struct {
 		ctx     context.Context
@@ -76,7 +85,7 @@ func FinishVoid(fns ...func()) {
 		return
 	}
 
-	MapVoid(func(source chan<- interface{}) {
+	ForEach(func(source chan<- interface{}) {
 		for _, fn := range fns {
 			source <- fn
 		}
@@ -86,38 +95,72 @@ func FinishVoid(fns ...func()) {
 	}, WithWorkers(len(fns)))
 }
 
-// Map maps all elements generated from given generate func, and returns an output channel.
-func Map(generate GenerateFunc, mapper MapFunc, opts ...Option) chan interface{} {
+// ForEach maps all elements from given generate but no output.
+func ForEach(generate GenerateFunc, mapper ForEachFunc, opts ...Option) {
 	options := buildOptions(opts...)
-	source := buildSource(generate)
+	panicChan := make(chan interface{})
+	source := buildSource(generate, panicChan)
 	collector := make(chan interface{}, options.workers)
 	done := make(chan struct{})
 
-	go executeMappers(options.ctx, mapper, source, collector, done, options.workers)
+	go executeMappers(mapperContext{
+		ctx: options.ctx,
+		mapper: func(item interface{}, writer Writer) {
+			mapper(item)
+		},
+		source: source,
+		panicChan: &onceChan{
+			channel: panicChan,
+		},
+		collector: collector,
+		doneChan:  done,
+		workers:   options.workers,
+	})
 
-	return collector
+	for {
+		select {
+		case v := <-panicChan:
+			panic(v)
+		case _, ok := <-collector:
+			if !ok {
+				return
+			}
+		}
+	}
 }
 
 // MapReduce maps all elements generated from given generate func,
 // and reduces the output elements with given reducer.
 func MapReduce(generate GenerateFunc, mapper MapperFunc, reducer ReducerFunc,
 	opts ...Option) (interface{}, error) {
-	source := buildSource(generate)
-	return MapReduceWithSource(source, mapper, reducer, opts...)
+	panicChan := make(chan interface{})
+	source := buildSource(generate, panicChan)
+	return mapReduceWithPanicChan(source, panicChan, mapper, reducer, opts...)
 }
 
-// MapReduceWithSource maps all elements from source, and reduce the output elements with given reducer.
-func MapReduceWithSource(source <-chan interface{}, mapper MapperFunc, reducer ReducerFunc,
+// MapReduceChan maps all elements from source, and reduce the output elements with given reducer.
+func MapReduceChan(source <-chan interface{}, mapper MapperFunc, reducer ReducerFunc,
 	opts ...Option) (interface{}, error) {
+	panicChan := make(chan interface{})
+	return mapReduceWithPanicChan(source, panicChan, mapper, reducer, opts...)
+}
+
+// MapReduceChan maps all elements from source, and reduce the output elements with given reducer.
+func mapReduceWithPanicChan(source <-chan interface{}, panicChan chan interface{}, mapper MapperFunc,
+	reducer ReducerFunc, opts ...Option) (interface{}, error) {
 	options := buildOptions(opts...)
+	// output is used to write the final result
 	output := make(chan interface{})
 	defer func() {
+		// reducer can only write once, if more, panic
 		for range output {
 			panic("more than one element written in reducer")
 		}
 	}()
 
+	// collector is used to collect data from mapper, and consume in reducer
 	collector := make(chan interface{}, options.workers)
+	// if done is closed, all mappers and reducer should stop processing
 	done := make(chan struct{})
 	writer := newGuardedWriter(options.ctx, output, done)
 	var closeOnce sync.Once
@@ -142,30 +185,47 @@ func MapReduceWithSource(source <-chan interface{}, mapper MapperFunc, reducer R
 
 	go func() {
 		defer func() {
-			drain(collector)
-
 			if r := recover(); r != nil {
-				cancel(fmt.Errorf("%v", r))
+				panicChan <- r
 			} else {
 				finish()
 			}
+
+			drain(collector)
 		}()
 
-		// callers need to make sure reducer not panic
 		reducer(collector, writer, cancel)
 	}()
 
-	go executeMappers(options.ctx, func(item interface{}, w Writer) {
-		mapper(item, w, cancel)
-	}, source, collector, done, options.workers)
+	go executeMappers(mapperContext{
+		ctx: options.ctx,
+		mapper: func(item interface{}, w Writer) {
+			mapper(item, w, cancel)
+		},
+		source: source,
+		panicChan: &onceChan{
+			channel: panicChan,
+		},
+		collector: collector,
+		doneChan:  done,
+		workers:   options.workers,
+	})
 
-	value, ok := <-output
-	if err := retErr.Load(); err != nil {
-		return nil, err.(error)
-	} else if ok {
-		return value, nil
-	} else {
-		return nil, ErrReduceNoOutput
+	select {
+	case <-options.ctx.Done():
+		cancel(context.DeadlineExceeded)
+		return nil, context.DeadlineExceeded
+	case v := <-panicChan:
+		finish()
+		panic(v)
+	case v, ok := <-output:
+		if err := retErr.Load(); err != nil {
+			return nil, err.(error)
+		} else if ok {
+			return v, nil
+		} else {
+			return nil, ErrReduceNoOutput
+		}
 	}
 }
 
@@ -175,18 +235,10 @@ func MapReduceVoid(generate GenerateFunc, mapper MapperFunc, reducer VoidReducer
 	_, err := MapReduce(generate, mapper, func(input <-chan interface{}, writer Writer, cancel func(error)) {
 		reducer(input, cancel)
 		// We need to write a placeholder to let MapReduce to continue on reducer done,
-		// otherwise, all goroutines are waiting.
-		// The placeholder will be discarded by MapReduce.
+		// otherwise, all goroutines are waiting. The placeholder will be discarded by MapReduce.
 		writer.Write(struct{}{})
 	}, opts...)
 	return err
-}
-
-// MapVoid maps all elements from given generate but no output.
-func MapVoid(generate GenerateFunc, mapper VoidMapFunc, opts ...Option) {
-	drain(Map(generate, func(item interface{}, writer Writer) {
-		mapper(item)
-	}, opts...))
 }
 
 // WithContext customizes a mapreduce processing accepts a given ctx.
@@ -216,10 +268,16 @@ func buildOptions(opts ...Option) *mapReduceOptions {
 	return options
 }
 
-func buildSource(generate GenerateFunc) chan interface{} {
+func buildSource(generate GenerateFunc, panicChan chan interface{}) chan interface{} {
 	source := make(chan interface{})
 	go func() {
-		defer close(source)
+		defer func() {
+			if r := recover(); r != nil {
+				panicChan <- r
+			}
+			close(source)
+		}()
+
 		generate(source)
 	}()
 
@@ -233,24 +291,31 @@ func drain(channel <-chan interface{}) {
 	}
 }
 
-func executeMappers(ctx context.Context, mapper MapFunc, input <-chan interface{},
-	collector chan<- interface{}, done <-chan struct{}, workers int) {
+func executeMappers(mCtx mapperContext) {
 	var wg sync.WaitGroup
 	defer func() {
 		wg.Wait()
-		close(collector)
+		close(mCtx.collector)
+		drain(mCtx.source)
 	}()
 
-	pool := make(chan struct{}, workers)
-	writer := newGuardedWriter(ctx, collector, done)
+	pool := make(chan struct{}, mCtx.workers)
+	innerPanicChan := make(chan interface{})
+	onceInnerChan := &onceChan{
+		channel: innerPanicChan,
+	}
+	writer := newGuardedWriter(mCtx.ctx, mCtx.collector, mCtx.doneChan)
 	for {
 		select {
-		case <-ctx.Done():
+		case <-mCtx.ctx.Done():
 			return
-		case <-done:
+		case <-mCtx.doneChan:
+			return
+		case v := <-innerPanicChan:
+			mCtx.panicChan.write(v)
 			return
 		case pool <- struct{}{}:
-			item, ok := <-input
+			item, ok := <-mCtx.source
 			if !ok {
 				<-pool
 				return
@@ -259,12 +324,14 @@ func executeMappers(ctx context.Context, mapper MapFunc, input <-chan interface{
 			wg.Add(1)
 			go func() {
 				defer func() {
+					if r := recover(); r != nil {
+						onceInnerChan.write(r)
+					}
 					wg.Done()
 					<-pool
 				}()
 
-				// callers need to make sure mapper won't panic
-				mapper(item, writer)
+				mCtx.mapper(item, writer)
 			}()
 		}
 	}
@@ -310,4 +377,17 @@ func (gw guardedWriter) Write(v interface{}) {
 	default:
 		gw.channel <- v
 	}
+}
+
+type onceChan struct {
+	channel chan<- interface{}
+	wrote   int32
+}
+
+func (oc *onceChan) write(val interface{}) {
+	if atomic.AddInt32(&oc.wrote, 1) > 1 {
+		return
+	}
+
+	oc.channel <- val
 }
