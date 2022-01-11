@@ -75,7 +75,6 @@ func Finish(fns ...func() error) error {
 			cancel(err)
 		}
 	}, func(pipe <-chan interface{}, cancel func(error)) {
-		drain(pipe)
 	}, WithWorkers(len(fns)))
 }
 
@@ -185,13 +184,11 @@ func mapReduceWithPanicChan(source <-chan interface{}, panicChan chan interface{
 
 	go func() {
 		defer func() {
+			drain(collector)
 			if r := recover(); r != nil {
 				panicChan <- r
-			} else {
-				finish()
 			}
-
-			drain(collector)
+			finish()
 		}()
 
 		reducer(collector, writer, cancel)
@@ -216,7 +213,6 @@ func mapReduceWithPanicChan(source <-chan interface{}, panicChan chan interface{
 		cancel(context.DeadlineExceeded)
 		return nil, context.DeadlineExceeded
 	case v := <-panicChan:
-		finish()
 		panic(v)
 	case v, ok := <-output:
 		if err := retErr.Load(); err != nil {
@@ -234,10 +230,11 @@ func mapReduceWithPanicChan(source <-chan interface{}, panicChan chan interface{
 func MapReduceVoid(generate GenerateFunc, mapper MapperFunc, reducer VoidReducerFunc, opts ...Option) error {
 	_, err := MapReduce(generate, mapper, func(input <-chan interface{}, writer Writer, cancel func(error)) {
 		reducer(input, cancel)
-		// We need to write a placeholder to let MapReduce to continue on reducer done,
-		// otherwise, all goroutines are waiting. The placeholder will be discarded by MapReduce.
-		writer.Write(struct{}{})
 	}, opts...)
+	if errors.Is(err, ErrReduceNoOutput) {
+		return nil
+	}
+
 	return err
 }
 

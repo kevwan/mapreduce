@@ -161,8 +161,6 @@ func TestMapperPanic(t *testing.T) {
 			}, func(item interface{}, writer Writer, cancel func(error)) {
 				panic("foo")
 			}, func(pipe <-chan interface{}, writer Writer, cancel func(error)) {
-				for range pipe {
-				}
 			})
 		})
 	})
