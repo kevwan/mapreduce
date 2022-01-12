@@ -97,7 +97,7 @@ func FinishVoid(fns ...func()) {
 // ForEach maps all elements from given generate but no output.
 func ForEach(generate GenerateFunc, mapper ForEachFunc, opts ...Option) {
 	options := buildOptions(opts...)
-	panicChan := make(chan interface{})
+	panicChan := &onceChan{channel: make(chan interface{})}
 	source := buildSource(generate, panicChan)
 	collector := make(chan interface{}, options.workers)
 	done := make(chan struct{})
@@ -107,10 +107,8 @@ func ForEach(generate GenerateFunc, mapper ForEachFunc, opts ...Option) {
 		mapper: func(item interface{}, writer Writer) {
 			mapper(item)
 		},
-		source: source,
-		panicChan: &onceChan{
-			channel: panicChan,
-		},
+		source:    source,
+		panicChan: panicChan,
 		collector: collector,
 		doneChan:  done,
 		workers:   options.workers,
@@ -118,7 +116,7 @@ func ForEach(generate GenerateFunc, mapper ForEachFunc, opts ...Option) {
 
 	for {
 		select {
-		case v := <-panicChan:
+		case v := <-panicChan.channel:
 			panic(v)
 		case _, ok := <-collector:
 			if !ok {
@@ -132,7 +130,7 @@ func ForEach(generate GenerateFunc, mapper ForEachFunc, opts ...Option) {
 // and reduces the output elements with given reducer.
 func MapReduce(generate GenerateFunc, mapper MapperFunc, reducer ReducerFunc,
 	opts ...Option) (interface{}, error) {
-	panicChan := make(chan interface{})
+	panicChan := &onceChan{channel: make(chan interface{})}
 	source := buildSource(generate, panicChan)
 	return mapReduceWithPanicChan(source, panicChan, mapper, reducer, opts...)
 }
@@ -140,12 +138,12 @@ func MapReduce(generate GenerateFunc, mapper MapperFunc, reducer ReducerFunc,
 // MapReduceChan maps all elements from source, and reduce the output elements with given reducer.
 func MapReduceChan(source <-chan interface{}, mapper MapperFunc, reducer ReducerFunc,
 	opts ...Option) (interface{}, error) {
-	panicChan := make(chan interface{})
+	panicChan := &onceChan{channel: make(chan interface{})}
 	return mapReduceWithPanicChan(source, panicChan, mapper, reducer, opts...)
 }
 
 // MapReduceChan maps all elements from source, and reduce the output elements with given reducer.
-func mapReduceWithPanicChan(source <-chan interface{}, panicChan chan interface{}, mapper MapperFunc,
+func mapReduceWithPanicChan(source <-chan interface{}, panicChan *onceChan, mapper MapperFunc,
 	reducer ReducerFunc, opts ...Option) (interface{}, error) {
 	options := buildOptions(opts...)
 	// output is used to write the final result
@@ -186,7 +184,7 @@ func mapReduceWithPanicChan(source <-chan interface{}, panicChan chan interface{
 		defer func() {
 			drain(collector)
 			if r := recover(); r != nil {
-				panicChan <- r
+				panicChan.write(r)
 			}
 			finish()
 		}()
@@ -199,10 +197,8 @@ func mapReduceWithPanicChan(source <-chan interface{}, panicChan chan interface{
 		mapper: func(item interface{}, w Writer) {
 			mapper(item, w, cancel)
 		},
-		source: source,
-		panicChan: &onceChan{
-			channel: panicChan,
-		},
+		source:    source,
+		panicChan: panicChan,
 		collector: collector,
 		doneChan:  done,
 		workers:   options.workers,
@@ -212,7 +208,7 @@ func mapReduceWithPanicChan(source <-chan interface{}, panicChan chan interface{
 	case <-options.ctx.Done():
 		cancel(context.DeadlineExceeded)
 		return nil, context.DeadlineExceeded
-	case v := <-panicChan:
+	case v := <-panicChan.channel:
 		panic(v)
 	case v, ok := <-output:
 		if err := retErr.Load(); err != nil {
@@ -265,12 +261,12 @@ func buildOptions(opts ...Option) *mapReduceOptions {
 	return options
 }
 
-func buildSource(generate GenerateFunc, panicChan chan interface{}) chan interface{} {
+func buildSource(generate GenerateFunc, panicChan *onceChan) chan interface{} {
 	source := make(chan interface{})
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				panicChan <- r
+				panicChan.write(r)
 			}
 			close(source)
 		}()
@@ -297,19 +293,18 @@ func executeMappers(mCtx mapperContext) {
 	}()
 
 	pool := make(chan struct{}, mCtx.workers)
-	innerPanicChan := make(chan interface{})
-	onceInnerChan := &onceChan{
-		channel: innerPanicChan,
-	}
 	writer := newGuardedWriter(mCtx.ctx, mCtx.collector, mCtx.doneChan)
+	pc := &onceChan{channel: make(chan interface{})}
 	for {
 		select {
 		case <-mCtx.ctx.Done():
 			return
 		case <-mCtx.doneChan:
 			return
-		case v := <-innerPanicChan:
-			mCtx.panicChan.write(v)
+		case r := <-pc.channel:
+			// make sure this method quit ASAP,
+			// without this case branch, all the items from source will be consumed.
+			mCtx.panicChan.write(r)
 			return
 		case pool <- struct{}{}:
 			item, ok := <-mCtx.source
@@ -322,7 +317,7 @@ func executeMappers(mCtx mapperContext) {
 			go func() {
 				defer func() {
 					if r := recover(); r != nil {
-						onceInnerChan.write(r)
+						pc.write(r)
 					}
 					wg.Done()
 					<-pool
@@ -377,7 +372,7 @@ func (gw guardedWriter) Write(v interface{}) {
 }
 
 type onceChan struct {
-	channel chan<- interface{}
+	channel chan interface{}
 	wrote   int32
 }
 

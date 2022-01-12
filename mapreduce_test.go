@@ -148,10 +148,10 @@ func TestGeneratePanic(t *testing.T) {
 }
 
 func TestMapperPanic(t *testing.T) {
-	const tasks = 1000
-
 	defer goleak.VerifyNone(t)
 
+	const tasks = 1000
+	var run int32
 	t.Run("all", func(t *testing.T) {
 		assert.PanicsWithValue(t, "foo", func() {
 			_, _ = MapReduce(func(source chan<- interface{}) {
@@ -159,10 +159,12 @@ func TestMapperPanic(t *testing.T) {
 					source <- i
 				}
 			}, func(item interface{}, writer Writer, cancel func(error)) {
+				atomic.AddInt32(&run, 1)
 				panic("foo")
 			}, func(pipe <-chan interface{}, writer Writer, cancel func(error)) {
 			})
 		})
+		assert.True(t, atomic.LoadInt32(&run) < tasks/2)
 	})
 }
 
@@ -425,6 +427,21 @@ func TestMapReducePanic(t *testing.T) {
 			for range pipe {
 				panic("panic")
 			}
+		})
+	})
+}
+
+func TestMapReducePanicBothMapperAndReducer(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	assert.Panics(t, func() {
+		_, _ = MapReduce(func(source chan<- interface{}) {
+			source <- 0
+			source <- 1
+		}, func(item interface{}, writer Writer, cancel func(error)) {
+			panic("foo")
+		}, func(pipe <-chan interface{}, writer Writer, cancel func(error)) {
+			panic("bar")
 		})
 	})
 }
