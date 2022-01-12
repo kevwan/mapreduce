@@ -431,6 +431,28 @@ func TestMapReducePanic(t *testing.T) {
 	})
 }
 
+func TestMapReducePanicOnce(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	assert.Panics(t, func() {
+		_, _ = MapReduce(func(source chan<- interface{}) {
+			for i := 0; i < 100; i++ {
+				source <- i
+			}
+		}, func(item interface{}, writer Writer, cancel func(error)) {
+			i := item.(int)
+			if i == 0 {
+				panic("foo")
+			}
+			writer.Write(i)
+		}, func(pipe <-chan interface{}, writer Writer, cancel func(error)) {
+			for range pipe {
+				panic("bar")
+			}
+		})
+	})
+}
+
 func TestMapReducePanicBothMapperAndReducer(t *testing.T) {
 	defer goleak.VerifyNone(t)
 
