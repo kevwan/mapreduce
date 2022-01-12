@@ -286,7 +286,15 @@ func drain(channel <-chan interface{}) {
 
 func executeMappers(mCtx mapperContext) {
 	var wg sync.WaitGroup
+	pc := &onceChan{channel: make(chan interface{})}
 	defer func() {
+		// in case panic happens when processing last item, for loop not handling it.
+		select {
+		case r := <-pc.channel:
+			mCtx.panicChan.write(r)
+		default:
+		}
+
 		wg.Wait()
 		close(mCtx.collector)
 		drain(mCtx.source)
@@ -294,7 +302,6 @@ func executeMappers(mCtx mapperContext) {
 
 	pool := make(chan struct{}, mCtx.workers)
 	writer := newGuardedWriter(mCtx.ctx, mCtx.collector, mCtx.doneChan)
-	pc := &onceChan{channel: make(chan interface{})}
 	for {
 		select {
 		case <-mCtx.ctx.Done():
