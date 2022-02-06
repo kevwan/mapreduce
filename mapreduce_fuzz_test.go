@@ -29,30 +29,29 @@ func FuzzMapReduce(f *testing.F) {
 		reducerIdx := rand.Int63n(n)
 		squareSum := (n - 1) * n * (2*n - 1) / 6
 
-		fn := func() (interface{}, error) {
+		fn := func() (int64, error) {
 			defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 
-			return MapReduce(func(source chan<- interface{}) {
+			return MapReduce(func(source chan<- int64) {
 				for i := int64(0); i < n; i++ {
 					source <- i
 					if genPanic && i == genIdx {
 						panic("foo")
 					}
 				}
-			}, func(item interface{}, writer Writer, cancel func(error)) {
-				v := item.(int64)
+			}, func(v int64, writer Writer[int64], cancel func(error)) {
 				if mapperPanic && v == mapperIdx {
 					panic("bar")
 				}
 				writer.Write(v * v)
-			}, func(pipe <-chan interface{}, writer Writer, cancel func(error)) {
+			}, func(pipe <-chan int64, writer Writer[int64], cancel func(error)) {
 				var idx int64
 				var total int64
 				for v := range pipe {
 					if reducerPanic && idx == reducerIdx {
 						panic("baz")
 					}
-					total += v.(int64)
+					total += v
 					idx++
 				}
 				writer.Write(total)
@@ -72,7 +71,7 @@ func FuzzMapReduce(f *testing.F) {
 		} else {
 			val, err := fn()
 			assert.Nil(t, err)
-			assert.Equal(t, squareSum, val.(int64))
+			assert.Equal(t, squareSum, val)
 		}
 	})
 }
