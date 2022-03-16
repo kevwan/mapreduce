@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/kevwan/mapreduce/v2"
+	"github.com/kevwan/mapreduce"
 )
 
 func main() {
