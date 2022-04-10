@@ -61,33 +61,33 @@
 package main
 
 import (
-    "fmt"
-    "log"
+	"fmt"
+	"log"
 
-    "github.com/kevwan/mapreduce"
+	"github.com/kevwan/mapreduce"
 )
 
 func main() {
-    val, err := mapreduce.MapReduce(func(source chan<- int) {
-        // generator
-        for i := 0; i < 10; i++ {
-            source <- i
-        }
-    }, func(i int, writer mapreduce.Writer[int], cancel func(error)) {
-        // mapper
-        writer.Write(i * i)
-    }, func(pipe <-chan int, writer mapreduce.Writer[int], cancel func(error)) {
-        // reducer
-        var sum int
-        for i := range pipe {
-            sum += i
-        }
-        writer.Write(sum)
-    })
-    if err != nil {
-        log.Fatal(err)
-    }
-    fmt.Println("result:", val)
+	val, err := mapreduce.MapReduce(func(source chan<- interface{}) {
+		// generator
+		for i := 0; i < 10; i++ {
+			source <- i
+		}
+	}, func(i interface{}, writer mapreduce.Writer, cancel func(error)) {
+		// mapper
+		writer.Write(i.(int) * i.(int))
+	}, func(pipe <-chan interface{}, writer mapreduce.Writer, cancel func(error)) {
+		// reducer
+		var sum int
+		for i := range pipe {
+			sum += i.(int)
+		}
+		writer.Write(sum)
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println("result:", val)
 }
 ```
 
