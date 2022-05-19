@@ -56,8 +56,8 @@ It's simple, just receive from a  channel or the given context in the goroutine.
 
 ## Choose the right version
 
-- v1 (default) - non-generic version
-- v2 (generics) - generic version, needs Go version >= 1.18
+- `v1` (default) - non-generic version
+- `v2` (generics) - generic version, needs Go version >= 1.18
 
 ## A simple example
 
