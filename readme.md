@@ -54,6 +54,11 @@ How can I terminate the process at any time?
 
 It's simple, just receive from a  channel or the given context in the goroutine.
 
+## Choose the right version
+
+- v1 (default) - non-generic version
+- v2 (generics) - generic version, needs Go version >= 1.18
+
 ## A simple example
 
 Calculate the sum of squares, simulating the concurrency.
@@ -65,7 +70,7 @@ import (
     "fmt"
     "log"
 
-    "github.com/kevwan/mapreduce"
+    "github.com/kevwan/mapreduce/v2"
 )
 
 func main() {
