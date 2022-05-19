@@ -1,4 +1,4 @@
-module github.com/kevwan/mapreduce
+module github.com/kevwan/mapreduce/v2
 
 go 1.18
 
