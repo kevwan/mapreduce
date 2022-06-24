@@ -97,12 +97,12 @@ func ForEach[T any](generate GenerateFunc[T], mapper ForEachFunc[T], opts ...Opt
 	options := buildOptions(opts...)
 	panicChan := &onceChan{channel: make(chan any)}
 	source := buildSource(generate, panicChan)
-	collector := make(chan any, options.workers)
+	collector := make(chan any)
 	done := make(chan struct{})
 
 	go executeMappers(mapperContext[T, any]{
 		ctx: options.ctx,
-		mapper: func(item T, writer Writer[any]) {
+		mapper: func(item T, _ Writer[any]) {
 			mapper(item)
 		},
 		source:    source,
