@@ -140,7 +140,7 @@ func MapReduceChan[T, U, V any](source <-chan T, mapper MapperFunc[T, U], reduce
 	return mapReduceWithPanicChan(source, panicChan, mapper, reducer, opts...)
 }
 
-// MapReduceChan maps all elements from source, and reduce the output elements with given reducer.
+// mapReduceWithPanicChan maps all elements from source, and reduce the output elements with given reducer.
 func mapReduceWithPanicChan[T, U, V any](source <-chan T, panicChan *onceChan, mapper MapperFunc[T, U],
 	reducer ReducerFunc[U, V], opts ...Option) (val V, err error) {
 	options := buildOptions(opts...)
@@ -207,6 +207,8 @@ func mapReduceWithPanicChan[T, U, V any](source <-chan T, panicChan *onceChan, m
 		cancel(context.DeadlineExceeded)
 		err = context.DeadlineExceeded
 	case v := <-panicChan.channel:
+		// drain output here, otherwise for loop panic in defer
+		drain(output)
 		panic(v)
 	case v, ok := <-output:
 		if e := retErr.Load(); e != nil {
@@ -373,9 +375,7 @@ type onceChan struct {
 }
 
 func (oc *onceChan) write(val any) {
-	if atomic.AddInt32(&oc.wrote, 1) > 1 {
-		return
+	if atomic.CompareAndSwapInt32(&oc.wrote, 0, 1) {
+		oc.channel <- val
 	}
-
-	oc.channel <- val
 }
